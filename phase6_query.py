@@ -6,9 +6,11 @@ from autogen_agentchat.ui import Console
 from autogen_ext.models.ollama import OllamaChatCompletionClient
 from autogen_ext.code_executors.docker import DockerCommandLineCodeExecutor
 
-USER_QUESTION = "Which department has the most employees, and what's their average years of experience?"
-
 async def main():
+    user_question = input("Ask a question about the employee data: ").strip()
+    if not user_question:
+        user_question = "What is the average salary overall?"
+
     model_client = OllamaChatCompletionClient(model="qwen2.5:7b")
 
     code_executor = DockerCommandLineCodeExecutor(
@@ -25,22 +27,32 @@ async def main():
         system_message=f"""You are QueryAnalyst, a data analysis code writer.
 
 The file 'featured_data.csv' has these exact columns (lowercase): name, department, salary, years_experience, salary_band, experience_level.
+Possible values: salary_band is one of Low/Medium/High. experience_level is one of Junior/Mid/Senior.
 
-The user's question is: "{USER_QUESTION}"
+The user's question is: "{user_question}"
 
 STRICT RULES:
-- Your ONLY message must contain ONE python code block, nothing else, no commentary.
+- Your ONLY message must contain ONE python code block. It MUST start with three backticks followed immediately by the word python, like this exact format:
+```python
+(your code here)
+```
+- No commentary, no text before or after the code block. The code block markers are mandatory or the system cannot run your code at all.
 - Write pandas code that loads featured_data.csv and computes whatever is needed to answer the question.
-- Print the result clearly using .to_string() on any dataframe/series so nothing truncates.
-- Do not say TERMINATE. Do not add any text before or after the code block.""",
+- If ambiguous, pick a reasonable interpretation and print it explicitly first.
+- Print results with .to_string() so nothing truncates, and print the row count.
+- Do not say TERMINATE.""",
     )
 
     answer_confirmer = AssistantAgent(
         name="AnswerConfirmer",
         model_client=model_client,
         system_message=f"""You are AnswerConfirmer.
-The user asked: "{USER_QUESTION}"
-Look at the REAL output from code_executor above. Answer the user's question in plain English, using ONLY numbers/values that actually appear in that real output. Do not invent anything.
+The user asked: "{user_question}"
+
+CRITICAL SAFETY RULE: Look at the REAL output from code_executor above.
+- If it contains an error, a traceback, or a message like "No code blocks found", DO NOT attempt to answer the question. Instead say exactly: "I couldn't compute an answer because the code failed to run. Error details: [quote the real error]." Then say TERMINATE.
+- If it contains real, valid data, answer the question in plain English using ONLY values that actually appear in that real output. Never invent names, numbers, or rows that are not literally present above.
+- If the result is a list of more than 3 items, list all of them and state the total count.
 Then say TERMINATE.""",
     )
 
@@ -51,7 +63,7 @@ Then say TERMINATE.""",
         termination_condition=termination,
     )
 
-    await Console(team.run_stream(task=USER_QUESTION))
+    await Console(team.run_stream(task=user_question))
 
     await code_executor.stop()
 
